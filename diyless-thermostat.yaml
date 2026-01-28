@@ -1,3 +1,6 @@
+# This project implements an advanced thermostat based on the Wemos D1 mini microcontroller (ESP8266)
+# and the OpenTherm protocol to control the Bosch Gaz 6000 W gas boiler
+
 esphome:
   name: diyless-thermostat
   friendly_name: DIYLESS Thermostat
@@ -13,14 +16,14 @@ logger:
         then:
           - if:
               condition:
-                # Шукаємо "timeout" у системному лозі [1]
+                # Шукаємо "timeout" у системному лозі
                 lambda: 'return std::string(message).find("timeout") != std::string::npos;'
               then:
-                # 1. Записуємо текст помилки в наш текстовий сенсор [2]
+                # 1. Записуємо текст помилки в наш текстовий сенсор
                 - text_sensor.template.publish:
                     id: last_timeout_msg
                     state: !lambda 'return message;'
-                # 2. Надсилаємо сповіщення в HA [1]
+                # 2. Надсилаємо сповіщення в HA
                 - homeassistant.service:
                     service: persistent_notification.create
                     data:
@@ -36,8 +39,10 @@ api:
 ota:
   - platform: esphome
 
+# Enable debug sensors
 debug:
 
+# WiFi settings
 wifi:
   fast_connect: true
   power_save_mode: NONE
@@ -101,6 +106,7 @@ web_server:
     - id: group_system_fault
       name: "❌ Помилки"
       sorting_weight: 50  
+
 # Enable OpenTherm communication
 # https://esphome.io/components/opentherm.html
 opentherm:
@@ -108,6 +114,7 @@ opentherm:
   out_pin: 5 # WeMos D1 Mini ESP32 output pin for stacking with Master OpenTherm Shield
   sync_mode: true # Блокує цикл для завершення обміну даними, усуваючи таймаути
           
+# Enable BME280 connection
 i2c:
   sda: D3
   scl: D4
@@ -143,6 +150,7 @@ globals:
   - id: sample_time_start
     type: uint32_t
     restore_value: false
+
 
 time:
   - platform: sntp
@@ -209,13 +217,32 @@ output:
 # Use numbers to control numerical values like CH/DHW setpoint from HA interface
 # https://esphome.io/components/opentherm.html#numerical-values 
 number:
-#  - platform: opentherm
+  - platform: opentherm
 #    t_set:
 #      id: ch_setpoint
 #      name: "Heating Setpoint"
 #      step: 1
 #      min_value: 30
 #      max_value: 80
+#      restore_value: true
+#      initial_value: 60
+    t_dhw_set:
+      id: dhw_setpoint
+      name: "How Water Setpoint"
+      icon: mdi:water-check-outline
+      step: 1
+      min_value: 40
+      max_value: 65
+      restore_value: true
+      initial_value: 60
+      web_server:
+        sorting_group_id: group_dhw
+#    max_t_set:
+#      id: ch_max_temp_limit
+#      name: "Макс. ліміт теплоносія"
+#      step: 1
+#      min_value: 40  # Технічний мінімум Bosch Gaz 6000 W
+#      max_value: 82  # Технічний максимум Bosch Gaz 6000 W
 #      restore_value: true
 #      initial_value: 60
 
@@ -266,28 +293,6 @@ number:
     on_value:
       then:
         - lambda: 'id(eco_offset) = x;' # Синхронізує введене число з глобальною змінною
-
-  - platform: opentherm
-    t_dhw_set:
-      id: dhw_setpoint
-      name: "How Water Setpoint"
-      icon: mdi:water-check-outline
-      step: 1
-      min_value: 40
-      max_value: 65
-      restore_value: true
-      initial_value: 60
-      web_server:
-        sorting_group_id: group_dhw
-
-#    max_t_set:
-#      id: ch_max_temp_limit
-#      name: "Макс. ліміт теплоносія"
-#      step: 1
-#      min_value: 40  # Технічний мінімум Bosch Gaz 6000 W
-#      max_value: 82  # Технічний максимум Bosch Gaz 6000 W
-#      restore_value: true
-#      initial_value: 60
 
 # Use binary sensors (on/off) to monitor the states and conditions of different boiler entities.
 # https://esphome.io/components/opentherm.html#binary-sensor
@@ -435,6 +440,7 @@ sensor:
       }
     update_interval: 30s
 
+# Approximate calculation of gas consumption based on modulation
   - platform: template
     name: "Estimated Gas Flow"
     id: gas_flow_rate
@@ -612,7 +618,7 @@ sensor:
       web_server:
         sorting_group_id: group_heating
 
-  #Перевірка доступності даних із HA і, у разі їх відсутності, перемикання на внутрішній сенсор, враховуючи вказану різницю в 1 градус
+# Checking data availability from HA and, if not, switching to the internal sensor
   - platform: template
     id: smart_room_temperature
     name: "Smart Room Temperature"
@@ -707,7 +713,7 @@ sensor:
       return t_water;
     update_interval: 60s
 
-  #Додаємо сенсор BME280
+  # Adding a BME280 sensor
   - platform: bme280_i2c
     temperature:
       name: "BME280 Temperature"
@@ -757,10 +763,10 @@ sensor:
         sorting_group_id: group_heating
     icon: mdi:delta
     lambda: |-
-      // Отримуємо цільову температуру з кліматичного контролера [1]
+      // Отримуємо цільову температуру з кліматичного контролера
       float target = id(ch_climate).target_temperature;
       
-      // Отримуємо поточну температуру з вашого "розумного" сенсора [2]
+      // Отримуємо поточну температуру з вашого "розумного" сенсора
       float current = id(smart_room_temperature).state;
       
       // Якщо дані недоступні, повертаємо NAN
@@ -799,7 +805,7 @@ text_sensor:
     web_server:
       sorting_group_id: group_status
 
-  # Час роботи термостата після останнього перезавантаження
+  # Thermostat operating time since last reset
   - platform: template
     name: "Uptime"
     icon: mdi:clock-outline
@@ -870,7 +876,7 @@ climate:
       deadband_output_averaging_samples: 40
     on_state:
       - lambda: |-
-          // 1. Керування живленням котла [3]
+          // 1. Керування живленням котла
           if (x.mode == CLIMATE_MODE_OFF) {
             id(ch_enable).turn_off();
           } else {
@@ -909,7 +915,7 @@ climate:
             id(ch_setpoint).set_level(cap);
           }
 
-          // 4. Логування (стиль 2026.1.0)
+          // 4. Логування
           ESP_LOGI("climate", "Target: %.1f, Water: %.1f %s", 
                    x.target_temperature, id(ch_setpoint).state,
                    id(night_mode).state ? "(NIGHT MODE)" : "");
@@ -998,10 +1004,10 @@ script:
             return; 
           }
 
-          // Формула: швидкість охолодження * 8 годин ночі * коеф. запасу 0.8 [3, 4]
+          // Формула: швидкість охолодження * 8 годин ночі * коеф. запасу 0.8
           float offset = id(cooling_rate) * 8.0 * 0.8; 
 
-          // Обмеження (clamp), щоб будинок не вихолодився більше ніж на 1.5°C [2, 3, 5]
+          // Обмеження (clamp), щоб будинок не вихолодився більше ніж на 1.5°C
           id(eco_offset) = clamp(offset, 0.3f, 1.5f); 
           
           // Синхронізація з Home Assistant
