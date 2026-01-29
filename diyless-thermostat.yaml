@@ -1,5 +1,7 @@
-# This project implements an advanced thermostat based on the Wemos D1 mini microcontroller (ESP8266)
-# and the OpenTherm protocol to control the Bosch Gaz 6000 W gas boiler
+# [UA] Проєкт інтелектуального термостата на базі Wemos D1 mini (ESP8266)
+# [UA] для керування газовим котлом Bosch Gaz 6000 W через протокол OpenTherm
+# [EN] Advanced thermostat project based on Wemos D1 mini (ESP8266)
+# [EN] for controlling Bosch Gaz 6000 W gas boiler via OpenTherm protocol
 
 esphome:
   name: diyless-thermostat
@@ -8,7 +10,8 @@ esphome:
 esp8266:
   board: d1_mini
 
-# Enable logging
+# [UA] Налаштування логування та автоматичне відстеження таймаутів OpenTherm
+# [EN] Logging settings and automatic OpenTherm timeout tracking
 logger:
   level: INFO
   on_message:
@@ -16,19 +19,15 @@ logger:
         then:
           - if:
               condition:
-                # Шукаємо "timeout" у системному лозі
+                # [UA] Перевірка наявності слова "timeout" у системному повідомленні
+                # [EN] Checking for the word "timeout" in the system message
                 lambda: 'return std::string(message).find("timeout") != std::string::npos;'
               then:
-                # 1. Записуємо текст помилки в наш текстовий сенсор
+                # [UA] Публікація помилки в текстовий сенсор
+                # [EN] Publishing the error to a text sensor
                 - text_sensor.template.publish:
                     id: last_timeout_msg
                     state: !lambda 'return message;'
-                # 2. Надсилаємо сповіщення в HA
-                - homeassistant.service:
-                    service: persistent_notification.create
-                    data:
-                      title: "ESPHome Timeout"
-                      message: !lambda 'return message;'
 
 # Enable Home Assistant API
 api:
@@ -42,13 +41,14 @@ ota:
 # Enable debug sensors
 debug:
 
-# WiFi settings
+# [UA] Налаштування Wi-Fi з підтримкою роумінгу та резервної мережі
+# [EN] Wi-Fi settings with roaming support and backup network connectivity
 wifi:
   fast_connect: true
-  power_save_mode: NONE
-  reboot_timeout: 0s
-  output_power: 8.5dB # Оптимізовано для відстані 1 метр
-  post_connect_roaming: true # Автоматичне перемикання на сильніший AP
+  power_save_mode: NONE # [UA] Критично для OpenTherm! [EN] Critical for OpenTherm!
+  reboot_timeout: 0s # [UA] Запобігає ребуту при зникненні мережі. [EN] Prevents reboot on Wi-Fi loss
+  output_power: 8.5dB # Optimized for a distance of 1 meter from the router
+  post_connect_roaming: true # Automatic switching to a stronger signal
 
   networks:
     - ssid: !secret iot_wifi_ssid
@@ -64,7 +64,7 @@ wifi:
     gateway: 192.168.0.1
     subnet: 255.255.255.0
     dns1: 192.168.0.1
-    dns2: 8.8.8.8 # Резервний DNS для стабільного часу (NTP)
+    dns2: 8.8.8.8 # Backup DNS for stable time (NTP)
 
   # Enable fallback hotspot (captive portal) in case wifi connection fails
   ap:
@@ -79,112 +79,212 @@ web_server:
   version: 3
   local: true
   include_internal: false
-  #css_url: "https://oi.esphome.io/v1/webserver-v3.min.css"
-  #css_include: "/config/esphome/style.css"
   sorting_groups:
     - id: group_status
-      name: "🛰️ Статус ESPHome"
+      name: "🛰️ Main status"
       sorting_weight: 1
     - id: group_heating
-      name: "🔥 Опалення"
+      name: "🔥 Heating"
       sorting_weight: 2
     - id: group_temperature
-      name: "🌡️ Температурні датчики"
+      name: "🌡️ Temperature sensors"
       sorting_weight: 3
     - id: group_calculation
-      name: "🧮 Розрахунки"
+      name: "🧮 Calculations"
       sorting_weight: 4
     - id: group_dhw
-      name: "🚿 Гаряча вода"
+      name: "🚿 Hot water"
       sorting_weight: 20
     - id: group_wifi
       name: "🛜 Wi-Fi"
       sorting_weight: 30
     - id: group_system_info
-      name: "⚙️ Системна інформація"
+      name: "⚙️ System info"
       sorting_weight: 40
     - id: group_system_fault
-      name: "❌ Помилки"
+      name: "❌ Errors"
       sorting_weight: 50  
 
 # Enable OpenTherm communication
 # https://esphome.io/components/opentherm.html
+# [UA] Налаштування шини OpenTherm. Використовуються піни D1 та D2
+# [EN] OpenTherm hub setup. Pins D1 and D2 are used
 opentherm:
   in_pin: 4 # WeMos D1 Mini ESP32 input pin for stacking with Master OpenTherm Shield
   out_pin: 5 # WeMos D1 Mini ESP32 output pin for stacking with Master OpenTherm Shield
-  sync_mode: true # Блокує цикл для завершення обміну даними, усуваючи таймаути
+  # [UA] sync_mode: true усуває конфлікти переривань при використанні інших датчиків
+  # [EN] sync_mode: true eliminates interrupt conflicts when using other sensors
+  sync_mode: true
           
 # Enable BME280 connection
+# [UA] Конфігурація I2C шини, перенесена на D6/D7 для стабільності
+# [EN] I2C bus configuration, moved to D6/D7 for hardware stability
 i2c:
-  sda: D3
-  scl: D4
+  sda: D6
+  scl: D7
   scan: true
 
+# [UA] Глобальні змінні - "Технічний паспорт" будинку (інерція та нагрів)
+# [EN] Global variables - House "Technical Passport" (inertia and heating rates)
 globals:
+  # [UA] Джерело температури: 1=Home Assistant, 2=Локальний BME280
+  # [EN] Temperature source: 1=Home Assistant, 2=Local BME280
   - id: temp_source
     type: int
     restore_value: true
     initial_value: '0'   # 0=NONE, 1=HA, 2=BME
 
+  # [UA] Час останнього отримання валідних даних від Home Assistant для перевірки стабільності зв'язку
+  # [EN] Timestamp of the last valid data received from Home Assistant to verify connection stability
   - id: ha_stable_since
     type: uint32_t
     restore_value: false
     initial_value: '0'
 
+  # [UA] Швидкість охолодження будинку (°C/год). Оновлюється скриптом measure_cooling
+  # [EN] House cooling rate (°C/h). Automatically updated by the measure_cooling script
   - id: cooling_rate
     type: float
     restore_value: true
-    initial_value: '0.3' # Швидкість охолодження (°C / год)
+    initial_value: '0.3' # Cooling rate (°C/h)
+
+  # [UA] Швидкість нагріву будинку (°C/год). Оновлюється скриптом measure_heating
+  # [EN] House heating rate (°C/h). Automatically updated by the measure_heating script
   - id: heating_rate
     type: float
     restore_value: true
-    initial_value: '0.5' # Швидкість нагріву (°C / год)
+    initial_value: '0.5' # Heating rate (°C/h)
+
+  # [UA] Поточне еко-зміщення для PID-регулятора, розраховане на основі інерції будівлі
+  # [EN] Current adaptive eco-offset for the PID controller, calculated based on house inertia
   - id: eco_offset
     type: float
     restore_value: false
     initial_value: '0.0'
 
+  # [UA] Тимчасові змінні для фіксації температури та часу на початку вимірювальних циклів
+  # [EN] Temporary variables to store temperature and time at the beginning of measurement cycles
   - id: temp_sample_start
     type: float
     restore_value: false
   - id: sample_time_start
     type: uint32_t
     restore_value: false
+ 
+  # [UA] Коефіцієнт самонавчання еко-режиму (0.6 - 0.9). Коригується скриптом eco_self_learning
+  # [EN] Eco mode self-learning gain (0.6 - 0.9). Adjusted daily by the eco_self_learning script
+  - id: eco_gain
+    type: float
+    restore_value: true
+    initial_value: '0.8'
+  
+  # [UA] Розрахункова тривалість ночі в годинах для прогнозування тепловтрат
+  # [EN] Calculated night duration in hours used for predicting heat loss
+  - id: night_duration_hours
+    type: float
+    restore_value: false
+    initial_value: '8.0'
 
+  # [UA] Кімнатна температура на момент завершення нічного режиму для аналізу похибки нагріву
+  # [EN] Room temperature at the moment night mode ends, used for heating error analysis
+  - id: morning_temp
+    type: float
+    restore_value: false
+
+  # [UA] Прапорець, що запобігає повторному запуску циклу самонавчання протягом однієї доби
+  # [EN] Safety flag to prevent multiple self-learning cycle executions within a single day
+  - id: night_ended_today
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+  # [UA] Кеш останньої відомої вуличної температури для роботи погодної кривої у разі збою Wi-Fi
+  # [EN] Cache of the last known outdoor temperature for weather curve logic during Wi-Fi outages
+  - id: last_valid_outside_temp
+    type: float
+    restore_value: true
+    initial_value: '0.0'
+
+  # [UA] Час останнього оновлення кешу вуличної температури для контролю його "свіжості" (ліміт 2 год)
+  # [EN] Timestamp of the last outdoor temperature cache update to monitor its age (2h limit)
+  - id: last_outside_update_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: '0'
 
 time:
   - platform: sntp
     id: sntp_time
-    timezone: "Europe/Kyiv" # Вкажіть ваш часовий пояс
+    timezone: "Europe/Kyiv" # Please specify your time zone
 
+# [UA] Блок інтервалів для періодичного виконання перевірок та запуску алгоритмів
+# [EN] Interval block for periodic checks and algorithm execution
+interval:
+  - interval: 60s
+    then:
+      - lambda: |-
+          auto now = id(sntp_time).now();
+          if (!now.is_valid()) return;
+
+          // [UA] Перетворення поточного часу у десятковий формат (напр., 7:30 = 7.5)
+          // [EN] Converting current time to decimal format (e.g., 7:30 = 7.5)
+          float current = now.hour + now.minute / 60.0;
+          float end = id(night_end_hour).state;
+
+          // [UA] Ранковий тригер: запускає самонавчання рівно один раз при досягненні кінця ночі
+          // [EN] Morning trigger: executes self-learning exactly once when night ends
+          if (!id(night_ended_today) &&
+              fabs(current - end) < 0.01) {
+
+            id(night_ended_today) = true;
+            id(eco_self_learning).execute();
+          }
+
+          // [UA] Скидання прапорця після опівночі для підготовки до нового ранкового циклу
+          // [EN] Resetting the flag after midnight to prepare for a new morning cycle
+          if (current < 0.1) {
+            id(night_ended_today) = false;
+          }
+
+# Dallas Sensor
 #one_wire:
 #  - platform: gpio
 #    pin: D5
 
-# Use switches to enable/disable central heating and hot water from HA interface
+# [UA] Блок перемикачів для ручного та логічного керування системою
+# [EN] Switch block for manual and logical system control
 # https://esphome.io/components/opentherm.html#switch
 switch:
+  # [UA] Дистанційне перезавантаження термостата
+  # [EN] Remote restart of the thermostat
   - platform: restart
     name: "Thermostat restart"
     web_server:
         sorting_group_id: group_status
 
-  # ВІРТУАЛЬНИЙ ПЕРЕМИКАЧ (ПУСТУНКА)
+  # [UA] Віртуальний перемикач для активації погодної кривої (Equithermic Curve)
+  # [UA] Коли увімкнено, PID обмежується температурою на основі вуличної температури
+  # [EN] Virtual switch to activate the Equithermic Curve logic
+  # [EN] When enabled, PID is capped by temperature based on outdoor conditions
   - platform: template
     name: "Use Heating Curve"
     id: use_curve_logic
     optimistic: true
     restore_mode: RESTORE_DEFAULT_OFF
     icon: "mdi:weather-partly-cloudy"
-    # Додаємо логування подій перемикання:
+    # Let's add logging of switching events:
     on_turn_on:
       - lambda: |-
-          ESP_LOGI("custom", "User ENABLED Heating Curve logic. Max water temp is now dynamic.");
+          ESP_LOGI("heating_curve", "ENABLED Heating Curve logic. Max water temp is now dynamic.");
     on_turn_off:
       - lambda: |-
-          ESP_LOGI("custom", "User DISABLED Heating Curve logic. System back to pure PID control.");
+          ESP_LOGI("heating_curve", "DISABLED Heating Curve logic. System back to pure PID control.");
 
+  # [UA] Апаратне керування контурами опалення та гарячої води через OpenTherm
+  # [EN] Hardware control for heating and domestic hot water (DHW) via OpenTherm
   - platform: opentherm
+    # [UA] Дозволяє Home Assistant повністю вимкнути запит на опалення від котла
+    # [EN] Allows Home Assistant to completely disable the boiler's heating request
     ch_enable:
       id: ch_enable
       name: "Heating"
@@ -193,6 +293,9 @@ switch:
       internal: false
       web_server:
         sorting_group_id: group_heating
+  
+    # [UA] Керування підігрівом гарячої води (ГВС)
+    # [EN] Control for Domestic Hot Water (DHW) heating
     dhw_enable:
       id: dhw_enable
       name: "Hot Water"
@@ -201,21 +304,30 @@ switch:
       web_server:
         sorting_group_id: group_dhw
 
+    # Allows you to enable/disable weather-dependent mode
 #    otc_active:
 #      id: otc_active
-#      name: "OTC Active" # Дозволяє вмикати/вимикати погодозалежний режим
+#      name: "OTC Active"
 
 # Use outputs to control numerical values like Central Heating setpoint using some automatic algorithms
+# [UA] Блок виводу для керування цільовою температурою теплоносія
+# [EN] Output block for controlling the central heating water temperature setpoint
 output:
   - platform: opentherm
     t_set:
       id: ch_setpoint
+      # [UA] Технічний діапазон Bosch Gaz 6000 W: 40°C - 82°C.
+      # [EN] Technical range for Bosch Gaz 6000 W: 40°C - 82°C.
       min_value: 40
       max_value: 80
+      # [UA] zero_means_zero: true гарантує повне вимкнення пальника при нульовому запиті від PID
+      # [EN] zero_means_zero: true ensures the burner shuts off completely when PID request is zero
       zero_means_zero: true
 
 # Use numbers to control numerical values like CH/DHW setpoint from HA interface
 # https://esphome.io/components/opentherm.html#numerical-values 
+# [UA] Блок числових параметрів для налаштування ГВП та розрахункових коефіцієнтів інерції будинку
+# [EN] Number block for DHW settings and house inertia calculation coefficients
 number:
   - platform: opentherm
 #    t_set:
@@ -226,6 +338,9 @@ number:
 #      max_value: 80
 #      restore_value: true
 #      initial_value: 60
+
+  # [UA] Цільова температура гарячої води (ГВП)
+  # [EN] Domestic Hot Water (DHW) target temperature
     t_dhw_set:
       id: dhw_setpoint
       name: "How Water Setpoint"
@@ -241,34 +356,38 @@ number:
 #      id: ch_max_temp_limit
 #      name: "Макс. ліміт теплоносія"
 #      step: 1
-#      min_value: 40  # Технічний мінімум Bosch Gaz 6000 W
-#      max_value: 82  # Технічний максимум Bosch Gaz 6000 W
+#      min_value: 40  # Technical minimum Bosch Gaz 6000 W
+#      max_value: 82  # Technical maximum Bosch Gaz 6000 W
 #      restore_value: true
 #      initial_value: 60
-
+  
+  # [UA] Коефіцієнт швидкості охолодження будинку. Оновлюється автоматично скриптом measure_cooling
+  # [EN] House cooling rate coefficient. Updated automatically by the measure_cooling script
   - platform: template
     name: "Будинок: Швидкість охолодження"
     id: cooling_rate_ui
     min_value: 0.0
     max_value: 2.0
     step: 0.01
-    unit_of_measurement: "°C/год"
+    unit_of_measurement: "°C/h"
     icon: "mdi:snowflake-thermometer"
-    restore_value: true # Зберігає введене значення в пам'яті ESP
+    restore_value: true # Stores the entered value in ESP memory
     optimistic: true
     web_server:
         sorting_group_id: group_calculation
     on_value:
       then:
-        - lambda: 'id(cooling_rate) = x;' # Оновлює глобальну змінну при ручному введенні
+        - lambda: 'id(cooling_rate) = x;' # Updates a global variable when manually entered
 
+  # [UA] Коефіцієнт швидкості нагріву будинку. Оновлюється автоматично скриптом measure_heating
+  # [EN] House heating rate coefficient. Updated automatically by the measure_heating script
   - platform: template
     name: "Будинок: Швидкість нагріву"
     id: heating_rate_ui
     min_value: 0.0
     max_value: 3.0
     step: 0.01
-    unit_of_measurement: "°C/год"
+    unit_of_measurement: "°C/h"
     icon: "mdi:sun-thermometer-outline"
     restore_value: true
     optimistic: true
@@ -276,8 +395,10 @@ number:
         sorting_group_id: group_calculation
     on_value:
       then:
-        - lambda: 'id(heating_rate) = x;'
+        - lambda: 'id(heating_rate) = x;' # Updates a global variable when manually entered
 
+  # [UA] Поточне еко-зміщення. Розраховується динамічно на основі швидкості охолодження та тривалості ночі
+  # [EN] Current eco-offset. Calculated dynamically based on cooling rate and night duration
   - platform: template
     name: "Будинок: Еко-зміщення"
     id: eco_offset_ui
@@ -286,28 +407,78 @@ number:
     step: 0.1
     unit_of_measurement: "°C"
     icon: "mdi:leaf"
-    restore_value: true # Дозволяє ESP "запам'ятати" цифру після ребуту
+    restore_value: true # Stores the entered value in ESP memory
     optimistic: true
     web_server:
       sorting_group_id: group_calculation
     on_value:
       then:
-        - lambda: 'id(eco_offset) = x;' # Синхронізує введене число з глобальною змінною
+        - lambda: 'id(eco_offset) = x;' # Updates a global variable when manually entered
+
+  # [UA] Година початку нічного режиму (використовується для розрахунку тривалості ночі)
+  # [EN] Night mode start hour (used for night duration calculation)
+  - platform: template
+    id: night_start_hour
+    name: "Night Mode Start Hour"
+    icon: mdi:weather-sunset-down
+    min_value: 0
+    max_value: 23
+    step: 0.5
+    optimistic: true
+    restore_value: true
+    initial_value: 23
+    unit_of_measurement: "h"
+    on_value:
+      then:
+        - script.execute: calc_night_duration
+
+  # [UA] Година завершення нічного режиму
+  # [EN] Night mode end hour
+  - platform: template
+    id: night_end_hour
+    name: "Night Mode End Hour"
+    icon: mdi:weather-sunset-up
+    min_value: 0
+    max_value: 23
+    step: 0.5
+    optimistic: true
+    restore_value: true
+    initial_value: 7
+    unit_of_measurement: "h"
+    on_value:
+      then:
+        - script.execute: calc_night_duration
 
 # Use binary sensors (on/off) to monitor the states and conditions of different boiler entities.
 # https://esphome.io/components/opentherm.html#binary-sensor
+# [UA] Бінарні сенсори для моніторингу станів системи та помилок котла
+# [EN] Binary sensors for monitoring system states and boiler faults
 binary_sensor:
-  # 1. Отримуємо сигнал "ніч" (налаштовується в HA за часом)
+  # [UA] Нічний режим (за розкладом). Використовує значення з повзунків UI
+  # [UA] Автоматично обробляє перехід через північ та запускає розрахунки інерції
+  # [EN] Night Mode (Scheduled). Uses values from UI sliders
+  # [EN] Automatically handles midnight transition and triggers inertia calculations
   - platform: template
     id: night_mode
-    icon: mdi:weather-night
     name: "Night Mode (Scheduled)"
-    # Логіка: увімкнено з 23:00 до 07:00
+    icon: mdi:weather-night
     lambda: |-
       auto time = id(sntp_time).now();
-      if (!time.is_valid()) return false; // Якщо час не синхронізовано, режим вимкнено
-      return (time.hour >= 23 || time.hour < 7);
-    # Це важливо: тригери для запуску розрахунків мають залишитися
+      if (!time.is_valid()) return false; 
+
+      float now_f = time.hour + time.minute / 60.0f;
+      float start = id(night_start_hour).state;
+      float end = id(night_end_hour).state;
+
+      if (start > end) {
+        // A case where the night lasts beyond midnight (e.g. 10:00 PM - 6:00 AM)
+        return (now_f >= start || now_f < end);
+      } else {
+        // The case when the start and end are within the same day (for example, 12:00 AM - 08:00 AM)
+        return (now_f >= start && now_f < end);
+      }
+    # [UA] Тригери для запуску розрахунків при переході в нічний режим
+    # [EN] Triggers to start calculations when entering night mode
     on_press:
       - script.execute: measure_cooling
       - script.execute: calculate_eco
@@ -323,6 +494,8 @@ binary_sensor:
 #      - delayed_on: 10 ms
 #      - delayed_off: 10 ms
 
+  # [UA] Статус підключення термостата до Home Assistant
+  # [EN] Thermostat connectivity status to Home Assistant
   - platform: status
     name: "Status"
     icon: mdi:home-automation
@@ -330,87 +503,97 @@ binary_sensor:
     web_server:
         sorting_group_id: group_status
 
+  # [UA] Статуси активності котла, що передаються через OpenTherm
+  # [EN] Boiler activity statuses transmitted via OpenTherm
   - platform: opentherm
+    #  [UA] Працює контур опалення. [EN] Central Heating is active
     ch_active:
       id: ch_active
       name: "Heating Active"
       web_server:
         sorting_group_id: group_heating
+  
+    # [UA] Працює контур гарячої води. [EN] Domestic Hot Water is active
     dhw_active:
       id: dhw_active
       name: "Hot Water Active"
       web_server:
         sorting_group_id: group_dhw
-      
+
+    # [UA] Стан пальника. Основний індикатор споживання газу.
+    # [EN] Flame status. The primary indicator of gas consumption.   
     flame_on:
       id: flame_on
       name: "Flame On"
       web_server:
         sorting_group_id: group_heating
 
-# Diagnostic
-    # Загальний індикатор несправності: активується при будь-якій критичній помилці котла
+    # [UA] ДІАГНОСТИЧНІ СЕНСОРИ (Сервісна група)
+    # [EN] DIAGNOSTIC SENSORS (Service group)
+    
+    # [UA] Загальний індикатор несправності: активується при будь-якій критичній помилці котла
+    # [EN] General boiler fault
     fault_indication:
       id: fault_indication
       name: "Boiler Fault"
-      icon: "mdi:alert-octagon" # Іконка зупинки/тривоги
+      icon: "mdi:alert-octagon"
       entity_category: diagnostic
       web_server:
         sorting_group_id: group_system_fault
 
-    # Діагностична подія: сигналізує про сервісну подію, що потребує аналізу
+    # [UA] Діагностична подія: сигналізує про сервісну подію, що потребує аналізу. [EN] Service required
     diagnostic_indication:
       id: diagnostic_indication
       name: "Boiler Diagnostic"
-      icon: "mdi:magnify-scan" # Символ діагностики та пошуку
+      icon: "mdi:magnify-scan"
       entity_category: diagnostic
       web_server:
         sorting_group_id: group_system_fault
 
-    # Запит на сервіс: вказує на необхідність планового ТО
+    # [UA] Запит на сервіс: вказує на необхідність планового ТО. [EN] Service required
     service_request:
       name: "Service Required"
-      icon: "mdi:hammer-wrench" # Стандартний символ сервісу Bosch
+      icon: "mdi:hammer-wrench"
       entity_category: diagnostic
       web_server:
         sorting_group_id: group_system_fault
 
-    # Стан блокування: котел потребує натискання кнопки "Reset"
+    # [UA] Стан блокування: котел потребує натискання кнопки "Reset". [EN] Lockout (requires manual Reset)
     lockout_reset:
       name: "Lockout Reset"
-      icon: "mdi:lock-reset" # Символ блокування та скидання
+      icon: "mdi:lock-reset"
       entity_category: diagnostic
       web_server:
         sorting_group_id: group_system_fault
 
-    # Низький тиск води: помилка CE у вашому котлі
+    # [UA] Низький тиск води (Помилка CE у Bosch). [EN] Low water pressure (Error CE in Bosch)
     low_water_pressure:
       name: "Low Water Pressure Fault"
-      icon: "mdi:gauge-low" # Символ низького тиску на манометрі
+      icon: "mdi:gauge-low"
       entity_category: diagnostic
       web_server:
         sorting_group_id: group_system_fault
 
-    # Помилка полум'я: проблеми з розпалом (помилка EA або FA)
+    # [UA] Помилка розпалу (Помилка EA або FA). [EN] Flame fault (Error EA or FA)
     flame_fault:
       name: "Flame Fault"
-      icon: "mdi:fire-off" # Символ відсутності полум'я
+      icon: "mdi:fire-off"
       entity_category: diagnostic
       web_server:
         sorting_group_id: group_system_fault
 
-    # Помилка тиску повітря: проблеми з вентилятором або димоходом (помилки C1–C7)
+    # [UA] Проблема з димоходом/вентилятором (Помилки C1–C7). [EN] Air pressure fault (Errors C1–C7).
     air_pressure_fault:
       name: "Air Pressure Fault"
-      icon: "mdi:fan-alert" # Символ несправності вентилятора
+      icon: "mdi:fan-alert"
       entity_category: diagnostic
       web_server:
         sorting_group_id: group_system_fault
 
-    # Перегрів води: спрацювання обмежувача температури (помилка E9)
+    # [UA] Перегрів теплоносія (Помилка E9). [EN] Water overtemperature (Error E9)
     water_over_temp:
       name: "Water Overtemperature"
-      icon: "mdi:thermometer-alert" # Символ критичної температури
+      icon: "mdi:thermometer-alert"
       entity_category: diagnostic 
       web_server:
         sorting_group_id: group_system_fault
@@ -450,7 +633,7 @@ sensor:
     lambda: |-
       if (id(flame_on).state) {
         float modulation = id(rel_mod_level).state / 100.0;
-        // 2.1 - макс. витрата, 0.624 - мін. витрата при мін. стабільному полум'ї (18кВт модель)
+        // 2.1 - max. flow rate, 0.624 - min. flow rate at min. stable flame (18kW model)
         return 0.624 + (modulation * (2.1 - 0.624));
       }
       return 0.0;
@@ -480,7 +663,7 @@ sensor:
     icon: mdi:memory
     accuracy_decimals: 1
     lambda: |-
-      // Для ESP8266 з вашим навантаженням 45000 байт — це реалістичний максимум
+      // For ESP8266 with your load, 45000 bytes is a realistic maximum
       float percentage = (id(free_ram).state / 45000.0) * 100.0;
       if (percentage > 100.0) percentage = 100.0;
       return percentage;
@@ -511,6 +694,14 @@ sensor:
     device_class: temperature
     web_server:
         sorting_group_id: group_temperature
+    # Fixing data in global variables only when it gets a numeric value (not unknown)
+    on_value:
+      then:
+        - lambda: |-
+            if (!std::isnan(x)) {
+              id(last_valid_outside_temp) = x;
+              id(last_outside_update_ms) = millis();
+            }
 
   - platform: uptime
     name: "Uptime seconds"
@@ -526,7 +717,7 @@ sensor:
       name: "Heating Temperature"
       icon: mdi:thermometer
       web_server:
-        sorting_group_id: group_heating # Прив'язка до групи
+        sorting_group_id: group_heating
     t_dhw:
       id: dhw_temperature
       name: "Hot Water Temperature"
@@ -658,7 +849,7 @@ sensor:
         new_source = 2; // BME
       }
 
-      // --- Логування переходів ---
+      // --- Logging of switching ---
       if (new_source != id(temp_source)) {
         if (new_source == 1) {
           ESP_LOGI("temp", "Temperature source switched to HOME ASSISTANT");
@@ -678,7 +869,7 @@ sensor:
         result = id(bme280_temperature).state;
       }
 
-      // --- ДОДАТИ ЦЕЙ БЛОК (Адаптивне Еко-зміщення) --- [1]
+      // --- Адаптивне Еко-зміщення ---
       if (id(night_mode).state && !std::isnan(result)) {
         result += id(eco_offset); // PID "думає", що в хаті тепліше, і м'яко знижує нагрів
       }
@@ -692,6 +883,25 @@ sensor:
     icon: "mdi:chart-bell-curve-cumulative"
     lambda: |-
       float to = id(t_outside_ha).state; // Вулична температура
+
+      // Якщо поточне значення NaN (unknown), перевіряємо кеш
+      // If the current value is NaN (unknown), check the cache
+      if (std::isnan(to)) {
+        uint32_t cache_age = millis() - id(last_outside_update_ms);
+        
+        // Якщо кеш свіжий (менше 2 годин = 7,200,000 мс)
+        // If the cache is fresh (less than 2 hours = 7,200,000 ms)
+        if (id(last_outside_update_ms) > 0 && cache_age < 7200000) {
+          to = id(last_valid_outside_temp);
+          ESP_LOGD("equitherm", "Using cached outdoor temp: %.1f (Age: %u s)", to, cache_age / 1000);
+        } else {
+          // Якщо кеш застарий або його немає, використовуємо аварійний fallback
+          // If the cache is outdated or missing, we use an emergency fallback
+          ESP_LOGW("equitherm", "Outdoor temp cache expired or empty. Using fallback 50C");
+          return 50.0; 
+        }
+      }
+
       float tr = id(pid_calculated_target).state; // Цільова температура в кімнаті
       // float k = 1.2;   // Коефіцієнт кривої (можна винести в globals)
       // --- Адаптивний коефіцієнт погодної кривої ---
@@ -823,9 +1033,9 @@ text_sensor:
 
       char buffer[32];
       snprintf(buffer, sizeof(buffer),
-               "%lu дн. %02lu:%02lu:%02lu",
+               "%u дн. %02u:%02u:%02u",
                days, hours, minutes, seconds);
-      return std::string(buffer);
+      return std::string{buffer};
 
   - platform: wifi_info
     ssid:
@@ -919,26 +1129,27 @@ climate:
           ESP_LOGI("climate", "Target: %.1f, Water: %.1f %s", 
                    x.target_temperature, id(ch_setpoint).state,
                    id(night_mode).state ? "(NIGHT MODE)" : "");
-          
-#      - logger.log:
-#          format: "climate mode=%s, t_target=%.1f, t_boiler_set=%.1f"
-#          args: ['climate_mode_to_string(x.mode)', 'x.target_temperature', 'id(ch_setpoint).state' ]
-#          level: INFO
 
+# [UA] Блок скриптів для реалізації складної логіки самонавчання та розрахунків
+# [EN] Script block for implementing complex self-learning logic and calculations
 script:
-  # Вимірювання швидкості охолодження (коли котел вимкнено)
+  # [UA] Вимірювання швидкості охолодження будинку (пасивна інерція)
+  # [UA] Працює 45 хвилин при вимкненому пальнику для отримання "чистого" результату
+  # [EN] Measuring house cooling rate (passive inertia)
+  # [EN] Runs for 45 minutes with the burner off to get a "clean" result
   - id: measure_cooling
     mode: restart
     then:
       - lambda: |-
-          ESP_LOGI("eco", "Охолодження. Початок заміру інерції (45 хв)...");
+          ESP_LOGI("measure_cooling", "Охолодження. Початок заміру інерції (45 хв)...");
           // Оновлюємо статус ОДРАЗУ при старті:
           id(calculation_status).publish_state("Вимірювання охолодження (триває 45 хв)");
           id(temp_sample_start) = id(smart_room_temperature).state;
           id(sample_time_start) = millis();
       - delay: 45min
       - lambda: |-
-          // Перевірка: якщо за цей час котел вмикався, замір неточний
+          // [UA] Перевірка: якщо за цей час котел вмикався, замір вважається неточним
+          // [EN] Check: if the boiler turned on during this time, the measurement is considered inaccurate
           if (id(flame_on).state) {
             id(calculation_status).publish_state("Охолодження перервано (вмикався котел)");
             return;
@@ -949,31 +1160,36 @@ script:
 
           float rate = (id(temp_sample_start) - id(smart_room_temperature).state) / dt;
 
+          // [UA] Валідація результату та оновлення глобальної змінної з фільтрацією (0.7/0.3)
+          // [EN] Result validation and global variable update with filtering (0.7/0.3)
           if (rate > 0 && rate < 2.0) {
             id(cooling_rate) = id(cooling_rate) * 0.7 + rate * 0.3;
             id(calculation_status).publish_state("Охолодження виміряно успішно");
             id(cooling_rate_ui).publish_state(id(cooling_rate)); 
-            ESP_LOGI("eco", "New cooling rate: %.2f °C/h", id(cooling_rate));
+            ESP_LOGI("measure_cooling", "New cooling rate: %.2f °C/h", id(cooling_rate));
           } else {
             id(calculation_status).publish_state("Замір неточний (Т не впала)");
           }
 
-  # --- Вимірювання нагріву (ранок / активне горіння) ---
+  # [UA] Вимірювання швидкості нагріву будинку при активній роботі пальника
+  # [EN] Measuring house heating rate during active burner operation
   - id: measure_heating
     mode: restart
     then:
       - lambda: |-
-          ESP_LOGI("eco", "Вимірювання нагріву (старт)...");
-          // Показуємо в ХА, що процес іде, а не що він уже перерваний
-          id(calculation_status).publish_state("Вимірювання нагріву (триває 30 хв)");
+          // Notification of the start of the heating rate measurement process (log and sensor)
+          id(calculation_status).publish_state("Heating measurement (lasts 30 min)");
+          ESP_LOGI("measure_heating", "Heating measurement (lasts 30 min)");
           
           id(temp_sample_start) = id(smart_room_temperature).state;
           id(sample_time_start) = millis();
       - delay: 30min
       - lambda: |-
-          // Тільки ТУТ ми перевіряємо, чи замір був успішним
+          // [UA] Перевірка модуляції: нагрів рахується лише при потужності > 20%
+          // [EN] Modulation check: heating is only calculated if power > 20%
           if (!id(flame_on).state || id(rel_mod_level).state < 20) {
-            id(calculation_status).publish_state("Нагрів перервано (низька потужність)");
+            id(calculation_status).publish_state("Heating interrupted (low power)");
+            ESP_LOGI("measure_heating", "Heating interrupted (low power)");
             return;
           }
 
@@ -984,15 +1200,17 @@ script:
 
           if (rate > 0 && rate <= 3.0) {
             id(heating_rate) = id(heating_rate) * 0.7 + rate * 0.3;
-            id(calculation_status).publish_state("Нагрів виміряно успішно");
+            id(calculation_status).publish_state("New heating rate calculated");
             id(heating_rate_ui).publish_state(id(heating_rate));
             
-            ESP_LOGI("eco", "New heating rate calculated: %.2f °C/h", id(heating_rate));
+            ESP_LOGI("measure_heating", "New heating rate calculated: %.2f °C/h", id(heating_rate));
           } else {
-            id(calculation_status).publish_state("Замір неточний (немає росту Т)");
+            ESP_LOGI("measure_heating", "The measurement is inaccurate (no T growth)");
+            id(calculation_status).publish_state("The measurement is inaccurate (no T growth))");
           }
 
-  # Розрахунок зміщення (offset) на основі інерції
+  # [UA] Розрахунок адаптивного еко-зміщення (offset) на основі поточної інерції
+  # [EN] Calculation of adaptive eco-offset based on current inertia
   - id: calculate_eco
     mode: restart
     then:
@@ -1004,8 +1222,9 @@ script:
             return; 
           }
 
-          // Формула: швидкість охолодження * 8 годин ночі * коеф. запасу 0.8
-          float offset = id(cooling_rate) * 8.0 * 0.8; 
+          // [UA] Формула: швидкість остигання * тривалість ночі * коефіцієнт самонавчання
+          // [EN] Formula: cooling rate * night duration * self-learning gain
+          float offset = id(cooling_rate) * id(night_duration_hours) * id(eco_gain);
 
           // Обмеження (clamp), щоб будинок не вихолодився більше ніж на 1.5°C
           id(eco_offset) = clamp(offset, 0.3f, 1.5f); 
@@ -1014,4 +1233,38 @@ script:
           id(eco_offset_ui).publish_state(id(eco_offset));
           id(calculation_status).publish_state("Еко-зміщення розраховано");
           
-          ESP_LOGI("eco", "Calculated adaptive offset: %.2f °C", id(eco_offset));
+          ESP_LOGI("calculate_eco", "Calculated adaptive offset: %.2f °C", id(eco_offset));
+
+  # [UA] Скрипт самонавчання: щоранку коригує eco_gain на основі похибки температури
+  # [EN] Self-learning script: adjusts eco_gain every morning based on temperature error
+  - id: eco_self_learning
+    mode: restart
+    then:
+      - lambda: |-
+          float error = id(morning_temp) - id(ch_climate).target_temperature;
+
+          // Холодно → eco був завеликий
+          if (error < -0.3) {
+            id(eco_gain) -= 0.05;
+          }
+          // Занадто тепло → можна економити більше
+          else if (error > 0.3) {
+            id(eco_gain) += 0.05;
+          }
+
+          id(eco_gain) = clamp(id(eco_gain), 0.6f, 0.9f);
+
+  # [UA] Розрахунок тривалості ночі для прогнозування тепловтрат
+  # [EN] Night duration calculation for predicting heat loss
+  - id: calc_night_duration
+    mode: restart
+    then:
+      - lambda: |-
+          float start = id(night_start_hour).state;
+          float end   = id(night_end_hour).state;
+
+          float hours = (end >= start)
+            ? (end - start)
+            : (24.0 - start + end);
+
+          id(night_duration_hours) = hours;
