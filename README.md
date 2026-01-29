@@ -1,7 +1,14 @@
-# Project: Advanced OpenTherm Thermostat for Bosch Gaz 6000 W
-# Version: 1.0 (for Wemos D1 mini)
-# Features: Local PID, Dynamic Equithermic Cap, Adaptive Night Eco
-# Documentation: 
-# - Uses local inertia estimation to calculate adaptive eco-offsets.
-# - Implements HA-to-BME280 fallback logic for room temperature.
-# - Optimized for ESPHome 2026.1.0 +
+🇺🇦 Загальний огляд проєкту
+Цей проєкт — це інтелектуальна система керування опаленням, спеціально адаптована для котлів Bosch Gaz 6000 W. Основна філософія полягає в тому, щоб перетворити звичайний газовий котел на "розумний" пристрій, який не просто вмикається і вимикається, а плавно модулює полум'я для підтримки ідеального комфорту та максимальної економії газу.
+Чому це краще за звичайний термостат?
+• Локальний інтелект: На відміну від систем, що залежать від хмари, цей термостат приймає рішення локально на ESP8266. Навіть якщо зникне Wi-Fi, PID-регулятор продовжить підтримувати тепло.
+• Симбіоз алгоритмів: Система поєднує точність PID-регулювання з енергоефективністю погодозалежного обмеження температури теплоносія.
+• Самонавчання: Термостат автоматично вимірює, як швидко ваш будинок втрачає і набирає тепло («паспорт будинку»), і підлаштовує нічний економ-режим під ці характеристики.
+
+--------------------------------------------------------------------------------
+🇺🇸 General Project Overview
+This project is an intelligent heating control system, specifically optimized for Bosch Gaz 6000 W boilers. The core philosophy is to transform a standard gas boiler into a "smart" appliance that doesn't just cycle on and off but smoothly modulates the flame to maintain ideal comfort and maximize gas efficiency.
+Why is it better than a standard thermostat?
+• Local Intelligence: Unlike cloud-dependent systems, this thermostat makes decisions locally on the ESP8266. Even if Wi-Fi is lost, the PID controller will continue to maintain the heat.
+• Algorithm Symbiosis: The system combines the precision of PID regulation with the energy efficiency of weather-compensated supply water temperature limiting.
+• Self-learning: The thermostat automatically measures how quickly your house loses and gains heat (the "house passport") and adjusts the night-time eco mode to match these specific characteristics.
