@@ -598,6 +598,8 @@ binary_sensor:
       web_server:
         sorting_group_id: group_system_fault
 
+# [UA] Блок сенсорів: збір даних з котла та реалізація "розумної температури"
+# [EN] Sensor block: gathering data from the boiler and implementing "smart temperature"
 sensor:
   - platform: wifi_signal
     id: wifi_signal_dbm
@@ -623,7 +625,8 @@ sensor:
       }
     update_interval: 30s
 
-# Approximate calculation of gas consumption based on modulation
+  # [UA] Розрахункова витрата газу на основі модуляції пальника (для моделі 18 кВт)
+  # [EN] Estimated gas flow based on burner modulation level (for 18kW model)
   - platform: template
     name: "Estimated Gas Flow"
     id: gas_flow_rate
@@ -633,7 +636,8 @@ sensor:
     lambda: |-
       if (id(flame_on).state) {
         float modulation = id(rel_mod_level).state / 100.0;
-        // 2.1 - max. flow rate, 0.624 - min. flow rate at min. stable flame (18kW model)
+        // [UA] 2.1 - макс. витрата, 0.624 - мін. стабільна витрата.
+        // [EN] 2.1 - max flow, 0.624 - min stable flow.
         return 0.624 + (modulation * (2.1 - 0.624));
       }
       return 0.0;
@@ -809,7 +813,8 @@ sensor:
       web_server:
         sorting_group_id: group_heating
 
-# Checking data availability from HA and, if not, switching to the internal sensor
+  # [UA] Логіка Smart Room Temperature: пріоритет Home Assistant з fallback на BME280
+  # [EN] Smart Room Temperature logic: Home Assistant priority with fallback to BME280
   - platform: template
     id: smart_room_temperature
     name: "Smart Room Temperature"
@@ -823,6 +828,8 @@ sensor:
         sorting_group_id: group_heating
     lambda: |-
       int new_source = 0;
+      // [UA] Перевірка стабільності HA (мінімум 10 сек зв'язку)
+      // [EN] Checking HA stability (minimum 10 sec connection)
       const uint32_t HA_STABLE_TIME = 10000; // 10 секунд стабільності
 
       // --- Перевірка HA ---
@@ -869,7 +876,8 @@ sensor:
         result = id(bme280_temperature).state;
       }
 
-      // --- Адаптивне Еко-зміщення ---
+      // [UA] Додавання адаптивного зміщення в нічному режимі
+      // [EN] Adding adaptive offset in night mode
       if (id(night_mode).state && !std::isnan(result)) {
         result += id(eco_offset); // PID "думає", що в хаті тепліше, і м'яко знижує нагрів
       }
@@ -986,9 +994,13 @@ sensor:
       
       // Розраховуємо різницю
       return target - current;
-    update_interval: 5s
+    update_interval: 30s
 
+# [UA] Текстові сенсори: діагностика та системні статуси
+# [EN] Text sensors: diagnostics and system statuses
 text_sensor:
+  # [UA] Зберігає останнє повідомлення про таймаут OpenTherm для дебагу
+  # [EN] Stores the last OpenTherm timeout message for debugging
   - platform: template
     name: "Last Timeout Message"
     icon: mdi:math-log
@@ -1056,6 +1068,8 @@ text_sensor:
 
 # Use PID Climate component for automatic boiler setpoint calculation
 # https://esphome.io/components/climate/pid
+# [UA] Блок Climate: серце системи. Керує PID-регулятором локально
+# [EN] Climate block: the heart of the system. Manages the PID controller locally
 climate:
   - platform: pid
     id: ch_climate
@@ -1073,6 +1087,8 @@ climate:
         target_temperature: 0.1
         current_temperature: 0.1
     control_parameters: 
+      # [UA] kp: 0.4 - м'яка реакція для запобігання тактуванню
+      # [EN] kp: 0.4 - soft reaction to prevent short cycling
       kp: 0.4
       ki: 0.002
       kd: 0
@@ -1110,7 +1126,8 @@ climate:
               id(ch_climate).set_kd(0.0);
           }
 
-          // 3. Динамічне обмеження температури теплоносія
+          // [UA] Динамічне обмеження теплоносія на основі погодної кривої та нічного режиму
+          // [EN] Dynamic supply water limiting based on weather curve and night mode
           float cap = id(equitherm_t_set).state; // Беремо значення з погодної кривої
           
           if (id(night_mode).state) {
@@ -1118,7 +1135,7 @@ climate:
           }
           
           // Технічний мінімум Bosch Gaz 6000 W
-          if (cap < 40.0) cap = 40.0; 
+          if (cap < 40.0) cap = 40.0; // [UA] Мін. поріг Bosch [EN] Bosch min threshold
 
           // Примусове обмеження виходу PID
           if (id(ch_setpoint).state > cap) {
