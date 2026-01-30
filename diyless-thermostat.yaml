@@ -3,6 +3,32 @@
 # [EN] Advanced thermostat project based on Wemos D1 mini (ESP8266)
 # [EN] for controlling Bosch Gaz 6000 W gas boiler via OpenTherm protocol
 
+substitutions:
+
+  # --- Eco mode limits ---
+  ECO_OFFSET_MIN: "0.3f"
+  ECO_OFFSET_MAX: "1.5f"
+
+  # --- Eco learning ---
+  ECO_GAIN_INIT: "0.8f"
+  ECO_GAIN_MIN: "0.6f"
+  ECO_GAIN_MAX: "0.9f"
+  ECO_GAIN_STEP: "0.05f"
+
+  # --- Time tolerances ---
+  NIGHT_TIME_TOLERANCE: "0.01f"   # ~36 seconds
+
+  # --- Measurement windows ---
+  COOLING_MEASURE_MINUTES: "45"
+  HEATING_MEASURE_MINUTES: "30"
+
+  # --- Measurement filters ---
+  EMA_ALPHA: "0.7f"
+
+  # --- Learning quality gate ---
+  MIN_VALID_COOLING_RATE: "0.02f"   # °C/hour
+  MIN_NIGHT_DURATION: "5.0f"        # hours
+
 esphome:
   name: diyless-thermostat
   friendly_name: DIYLESS Thermostat
@@ -143,17 +169,17 @@ globals:
 
   # [UA] Швидкість охолодження будинку (°C/год). Оновлюється скриптом measure_cooling
   # [EN] House cooling rate (°C/h). Automatically updated by the measure_cooling script
-  - id: cooling_rate
+  - id: cooling_rate_measured
     type: float
     restore_value: true
-    initial_value: '0.3' # Cooling rate (°C/h)
+    initial_value: '0.0' # Cooling rate (°C/h)
 
   # [UA] Швидкість нагріву будинку (°C/год). Оновлюється скриптом measure_heating
   # [EN] House heating rate (°C/h). Automatically updated by the measure_heating script
-  - id: heating_rate
+  - id: heating_rate_measured
     type: float
     restore_value: true
-    initial_value: '0.5' # Heating rate (°C/h)
+    initial_value: '0.0' # Heating rate (°C/h)
 
   # [UA] Поточне еко-зміщення для PID-регулятора, розраховане на основі інерції будівлі
   # [EN] Current adaptive eco-offset for the PID controller, calculated based on house inertia
@@ -176,7 +202,7 @@ globals:
   - id: eco_gain
     type: float
     restore_value: true
-    initial_value: '0.8'
+    initial_value: ${ECO_GAIN_INIT}
   
   # [UA] Розрахункова тривалість ночі в годинах для прогнозування тепловтрат
   # [EN] Calculated night duration in hours used for predicting heat loss
@@ -212,6 +238,27 @@ globals:
     restore_value: false
     initial_value: '0'
 
+  - id: learning_quality_ok
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+  - id: boiler_was_active_at_night
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+  - id: night_mode_active
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+  # [UA] Тривалість попереднього нагріву в годинах.
+  # [EN] Preheat duration in hours.
+  - id: preheat_hours
+    type: float
+    initial_value: '0.0'
+
 time:
   - platform: sntp
     id: sntp_time
@@ -234,9 +281,10 @@ interval:
           // [UA] Ранковий тригер: запускає самонавчання рівно один раз при досягненні кінця ночі
           // [EN] Morning trigger: executes self-learning exactly once when night ends
           if (!id(night_ended_today) &&
-              fabs(current - end) < 0.01) {
+              fabs(current - end) < ${NIGHT_TIME_TOLERANCE}) {
 
             id(night_ended_today) = true;
+            id(evaluate_night_quality).execute();
             id(eco_self_learning).execute();
           }
 
@@ -244,6 +292,26 @@ interval:
           // [EN] Resetting the flag after midnight to prepare for a new morning cycle
           if (current < 0.1) {
             id(night_ended_today) = false;
+          }
+
+  - interval: 5s
+    then:
+      - lambda: |-
+          // [UA] Отримуємо поточний ліміт з погодної кривої
+          float cap = id(equitherm_t_set).state;
+          
+          // [UA] Враховуємо нічне зниження, якщо воно активне
+          if (id(night_mode).state) {
+            cap -= 8.0f; 
+          }
+          
+          // [UA] Bosch Gaz 6000 W не повинен отримувати запит нижче 40°C
+          if (cap < 40.0f) cap = 40.0f;
+
+          // [UA] Якщо PID видав більше, ніж дозволяє крива — примусово знижуємо
+          if (id(ch_setpoint).state > cap) {
+            ESP_LOGW("safety", "PID requested %.1f, but Heating Curve limits to %.1f", id(ch_setpoint).state, cap);
+            id(ch_setpoint).set_level(cap);
           }
 
 # Dallas Sensor
@@ -377,7 +445,7 @@ number:
         sorting_group_id: group_calculation
     on_value:
       then:
-        - lambda: 'id(cooling_rate) = x;' # Updates a global variable when manually entered
+        - lambda: 'id(cooling_rate_measured) = x;' # Updates a global variable when manually entered
 
   # [UA] Коефіцієнт швидкості нагріву будинку. Оновлюється автоматично скриптом measure_heating
   # [EN] House heating rate coefficient. Updated automatically by the measure_heating script
@@ -395,7 +463,7 @@ number:
         sorting_group_id: group_calculation
     on_value:
       then:
-        - lambda: 'id(heating_rate) = x;' # Updates a global variable when manually entered
+        - lambda: 'id(heating_rate_measured) = x;' # Updates a global variable when manually entered
 
   # [UA] Поточне еко-зміщення. Розраховується динамічно на основі швидкості охолодження та тривалості ночі
   # [EN] Current eco-offset. Calculated dynamically based on cooling rate and night duration
@@ -463,12 +531,19 @@ binary_sensor:
     name: "Night Mode (Scheduled)"
     icon: mdi:weather-night
     lambda: |-
+      id(boiler_was_active_at_night) = false;
+      id(night_mode_active) = true;
       auto time = id(sntp_time).now();
       if (!time.is_valid()) return false; 
 
       float now_f = time.hour + time.minute / 60.0f;
       float start = id(night_start_hour).state;
       float end = id(night_end_hour).state;
+
+      // [UA] Розрахунок динамічного часу виходу
+      // [EN] Calculation of the dynamic exit time
+      float adjusted_end = end - id(preheat_hours);
+      if (adjusted_end < 0) adjusted_end += 24.0f;
 
       if (start > end) {
         // A case where the night lasts beyond midnight (e.g. 10:00 PM - 6:00 AM)
@@ -480,8 +555,17 @@ binary_sensor:
     # [UA] Тригери для запуску розрахунків при переході в нічний режим
     # [EN] Triggers to start calculations when entering night mode
     on_press:
+      - lambda: |-
+          id(night_mode_active) = true;
+          id(boiler_was_active_at_night) = false;
       - script.execute: measure_cooling
+      # [UA] Оновлюємо розрахунок Preheat щоразу при вході в ніч
+      # [EN] Update Preheat calculation every time when entering night mode
+      - script.execute: calculate_preheat_duration 
       - script.execute: calculate_eco
+    on_release:
+      - lambda: |-
+          id(night_mode_active) = false;
 
 # Gas counter
 #  - platform: gpio
@@ -525,6 +609,12 @@ binary_sensor:
     flame_on:
       id: flame_on
       name: "Flame On"
+      on_press:
+        then:
+          - lambda: |-
+              if (id(night_mode_active)) {
+                id(boiler_was_active_at_night) = true;
+              }
       web_server:
         sorting_group_id: group_heating
 
@@ -687,6 +777,25 @@ sensor:
       - heartbeat: 5s
     web_server:
         sorting_group_id: group_temperature
+
+  - platform: template
+    name: "Outdoor Temperature (In Use)"
+    id: outdoor_temp_in_use
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer-check
+    # [UA] Оновлюємо раз на хвилину, щоб не перевантажувати ESP8266
+    # [EN] Update once per minute to avoid overloading ESP8266
+    update_interval: 60s
+    lambda: |-
+      // [UA] Пріоритет: дані HA -> кеш (до 2 год) -> NAN (помилка)
+      // [EN] Priority: live HA data -> cache (up to 2h) -> NAN (error)
+      if (!std::isnan(id(t_outside_ha).state)) {
+        return id(t_outside_ha).state;
+      } else if (id(last_outside_update_ms) > 0 && (millis() - id(last_outside_update_ms) < 7200000)) {
+        ESP_LOGD("temp", "HA data missing, using cached outdoor temp.");
+        return id(last_valid_outside_temp);
+      }
+      return NAN;
 
   - platform: homeassistant
     entity_id: sensor.external_weather_temp_sensor
@@ -890,41 +999,36 @@ sensor:
     unit_of_measurement: "°C"
     icon: "mdi:chart-bell-curve-cumulative"
     lambda: |-
-      float to = id(t_outside_ha).state; // Вулична температура
+      float to = id(outdoor_temp_in_use).state;
 
-      // Якщо поточне значення NaN (unknown), перевіряємо кеш
-      // If the current value is NaN (unknown), check the cache
+      // [UA] ПЕРЕВІРКА ДОСТУПНОСТІ ТЕМПЕРАТУРИ
+      // [EN] CHECKING TEMPERATURE AVAILABILITY
       if (std::isnan(to)) {
-        uint32_t cache_age = millis() - id(last_outside_update_ms);
-        
-        // Якщо кеш свіжий (менше 2 годин = 7,200,000 мс)
-        // If the cache is fresh (less than 2 hours = 7,200,000 ms)
-        if (id(last_outside_update_ms) > 0 && cache_age < 7200000) {
-          to = id(last_valid_outside_temp);
-          ESP_LOGD("equitherm", "Using cached outdoor temp: %.1f (Age: %u s)", to, cache_age / 1000);
-        } else {
-          // Якщо кеш застарий або його немає, використовуємо аварійний fallback
-          // If the cache is outdated or missing, we use an emergency fallback
-          ESP_LOGW("equitherm", "Outdoor temp cache expired or empty. Using fallback 50C");
-          return 50.0; 
+        if (id(use_curve_logic).state) {
+          // [UA] Автоматично вимикаємо режим, якщо джерело повернуло NAN (кеш вичерпано)
+          // [EN] Automatically disable the mode if the source returns NAN (cache expired)
+          id(use_curve_logic).turn_off();
+          ESP_LOGE("equitherm", "Вулична температура недоступна (кеш порожній)! Режим кривої ВИМКНЕНО.");
         }
+        return 50.0f; // [UA] Безпечне значення при помилці [EN] Safe fallback value
       }
 
-      float tr = id(pid_calculated_target).state; // Цільова температура в кімнаті
-      // float k = 1.2;   // Коефіцієнт кривої (можна винести в globals)
-      // --- Адаптивний коефіцієнт погодної кривої ---
+      float tr = id(pid_calculated_target).state; // [UA] Кімнатна ціль [EN] Room target
+      
+      // [UA] Адаптивний коефіцієнт кривої k залежно від суворості морозу
+      // [EN] Adaptive curve coefficient k based on frost severity
       float k;
-      if (to <= -10.0)      k = 1.30;
-      else if (to <= 0.0)   k = 1.15;
-      else if (to <= 5.0)   k = 1.00;
-      else                  k = 0.85;
+      if (to <= -10.0) k = 1.30;
+      else if (to <= 0.0) k = 1.15;
+      else if (to <= 5.0) k = 1.00;
+      else k = 0.85;
 
-      if (std::isnan(to)) return 50.0; // Fallback: якщо HA не передав дані, ставимо мінімальні 40°C
+      // [UA] Розрахунок за класичною формулою опалювальної кривої
+      // [EN] Calculation using the classic heating curve formula
+      float t_water = tr + k * (tr - to);
 
-      // Класична формула опалювальної кривої
-      float t_water = tr + k * (tr - to); 
-
-      // Обмеження для Bosch Gaz 6000 W (діапазон 40-82°C)
+      // [UA] Апаратні обмеження Bosch Gaz 6000 W (діапазон 40-80°C)
+      // [EN] Hardware limits for Bosch Gaz 6000 W (range 40-80°C)
       if (t_water > 80.0) t_water = 80.0;
       if (t_water < 40.0) t_water = 40.0;
 
@@ -1180,10 +1284,10 @@ script:
           // [UA] Валідація результату та оновлення глобальної змінної з фільтрацією (0.7/0.3)
           // [EN] Result validation and global variable update with filtering (0.7/0.3)
           if (rate > 0 && rate < 2.0) {
-            id(cooling_rate) = id(cooling_rate) * 0.7 + rate * 0.3;
+            id(cooling_rate_measured) = id(cooling_rate_measured) * 0.7 + rate * 0.3;
             id(calculation_status).publish_state("Охолодження виміряно успішно");
-            id(cooling_rate_ui).publish_state(id(cooling_rate)); 
-            ESP_LOGI("measure_cooling", "New cooling rate: %.2f °C/h", id(cooling_rate));
+            id(cooling_rate_ui).publish_state(id(cooling_rate_measured)); 
+            ESP_LOGI("measure_cooling", "New cooling rate: %.2f °C/h", id(cooling_rate_measured));
           } else {
             id(calculation_status).publish_state("Замір неточний (Т не впала)");
           }
@@ -1216,15 +1320,34 @@ script:
           float rate = (id(smart_room_temperature).state - id(temp_sample_start)) / dt;
 
           if (rate > 0 && rate <= 3.0) {
-            id(heating_rate) = id(heating_rate) * 0.7 + rate * 0.3;
+            id(heating_rate_measured) = id(heating_rate_measured) * 0.7 + rate * 0.3;
             id(calculation_status).publish_state("New heating rate calculated");
-            id(heating_rate_ui).publish_state(id(heating_rate));
+            id(heating_rate_ui).publish_state(id(heating_rate_measured));
             
-            ESP_LOGI("measure_heating", "New heating rate calculated: %.2f °C/h", id(heating_rate));
+            ESP_LOGI("measure_heating", "New heating rate calculated: %.2f °C/h", id(heating_rate_measured));
           } else {
             ESP_LOGI("measure_heating", "The measurement is inaccurate (no T growth)");
             id(calculation_status).publish_state("The measurement is inaccurate (no T growth))");
           }
+
+  - id: calculate_preheat_duration
+    mode: restart
+    then:
+      - lambda: |-
+          // [UA] Запобігаємо діленню на нуль або занадто малому значенню.
+          // [EN] Prevent division by zero or too small a value.
+          if (id(heating_rate_measured) > 0.05f) {
+            float hours = id(eco_offset) / id(heating_rate_measured);
+            
+            // [UA] Обмежуємо Preheat максимум 4 годинами для безпеки.
+            // [EN] Limit Preheat to a maximum of 4 hours for safety.
+            id(preheat_hours) = clamp(hours, 0.0f, 4.0f); 
+            
+            ESP_LOGI("preheat", "Розраховано час випередження: %.1f год", id(preheat_hours));
+          } else {
+            id(preheat_hours) = 0.0f;
+          }
+
 
   # [UA] Розрахунок адаптивного еко-зміщення (offset) на основі поточної інерції
   # [EN] Calculation of adaptive eco-offset based on current inertia
@@ -1241,10 +1364,17 @@ script:
 
           // [UA] Формула: швидкість остигання * тривалість ночі * коефіцієнт самонавчання
           // [EN] Formula: cooling rate * night duration * self-learning gain
-          float offset = id(cooling_rate) * id(night_duration_hours) * id(eco_gain);
+          float offset =
+            id(cooling_rate_measured) *
+            id(night_duration_hours) *
+            id(eco_gain);
 
           // Обмеження (clamp), щоб будинок не вихолодився більше ніж на 1.5°C
-          id(eco_offset) = clamp(offset, 0.3f, 1.5f); 
+          id(eco_offset) = clamp(
+            offset,
+            ${ECO_OFFSET_MIN},
+            ${ECO_OFFSET_MAX}
+          );
           
           // Синхронізація з Home Assistant
           id(eco_offset_ui).publish_state(id(eco_offset));
@@ -1258,18 +1388,25 @@ script:
     mode: restart
     then:
       - lambda: |-
+          if (!id(learning_quality_ok)) {
+            ESP_LOGI("eco", "Learning skipped: night quality not OK");
+            return;
+          }
+
           float error = id(morning_temp) - id(ch_climate).target_temperature;
 
           // Холодно → eco був завеликий
           if (error < -0.3) {
-            id(eco_gain) -= 0.05;
+            id(eco_gain) -= ${ECO_GAIN_STEP};
           }
           // Занадто тепло → можна економити більше
           else if (error > 0.3) {
-            id(eco_gain) += 0.05;
+            id(eco_gain) += ${ECO_GAIN_STEP};
           }
 
-          id(eco_gain) = clamp(id(eco_gain), 0.6f, 0.9f);
+          id(eco_gain) = clamp(id(eco_gain), ${ECO_GAIN_MIN}, ${ECO_GAIN_MAX});
+
+          ESP_LOGI("eco", "Learning applied, new eco_gain=%.2f", id(eco_gain));
 
   # [UA] Розрахунок тривалості ночі для прогнозування тепловтрат
   # [EN] Night duration calculation for predicting heat loss
@@ -1285,3 +1422,26 @@ script:
             : (24.0 - start + end);
 
           id(night_duration_hours) = hours;
+
+  - id: evaluate_night_quality
+    mode: restart
+    then:
+      - lambda: |-
+          bool ok = true;
+
+          // 1. Є валідне вимірювання охолодження
+          if (id(cooling_rate_measured) < ${MIN_VALID_COOLING_RATE}) {
+            ok = false;
+          }
+
+          // 2. Ніч достатньо довга
+          if (id(night_duration_hours) < ${MIN_NIGHT_DURATION}) {
+            ok = false;
+          }
+
+          // 3. Котел не вмикався (очікується, що цей флаг у тебе вже є)
+          if (id(boiler_was_active_at_night)) {
+            ok = false;
+          }
+
+          id(learning_quality_ok) = ok;
