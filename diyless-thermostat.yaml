@@ -40,20 +40,20 @@ esp8266:
 # [EN] Logging settings and automatic OpenTherm timeout tracking
 logger:
   level: INFO
-  on_message:
-      - level: WARN
-        then:
-          - if:
-              condition:
-                # [UA] Перевірка наявності слова "timeout" у системному повідомленні
-                # [EN] Checking for the word "timeout" in the system message
-                lambda: 'return std::string(message).find("timeout") != std::string::npos;'
-              then:
-                # [UA] Публікація помилки в текстовий сенсор
-                # [EN] Publishing the error to a text sensor
-                - text_sensor.template.publish:
-                    id: last_timeout_msg
-                    state: !lambda 'return message;'
+#  on_message:
+#      - level: WARN
+#        then:
+#          - if:
+#              condition:
+#                # [UA] Перевірка наявності слова "timeout" у системному повідомленні
+#                # [EN] Checking for the word "timeout" in the system message
+#                lambda: 'return std::string(message).find("timeout") != std::string::npos;'
+#              then:
+#                # [UA] Публікація помилки в текстовий сенсор
+#                # [EN] Publishing the error to a text sensor
+#                - text_sensor.template.publish:
+#                    id: last_timeout_msg
+#                    state: !lambda 'return message;'
 
 # Enable Home Assistant API
 api:
@@ -93,12 +93,12 @@ wifi:
     dns2: 8.8.8.8 # Backup DNS for stable time (NTP)
 
   # Enable fallback hotspot (captive portal) in case wifi connection fails
-  ap:
-    ssid: "DIYLESS Thermostat"
-    password: ""
+  #ap:
+  #  ssid: "DIYLESS Thermostat"
+  #  password: ""
 
 # Enable captive portal as fallback mechanism for when connecting to the configured WiFi fails.
-captive_portal:
+#captive_portal:
 
 # Enable simple web server to remotelly control the device using web interface
 web_server:  
@@ -272,31 +272,23 @@ interval:
       - lambda: |-
           auto now = id(sntp_time).now();
           if (!now.is_valid()) return;
-
+          
           // [UA] Перетворення поточного часу у десятковий формат (напр., 7:30 = 7.5)
           // [EN] Converting current time to decimal format (e.g., 7:30 = 7.5)
-          float current = now.hour + now.minute / 60.0;
-          float end = id(night_end_hour).state;
-
-          // [UA] Ранковий тригер: запускає самонавчання рівно один раз при досягненні кінця ночі
-          // [EN] Morning trigger: executes self-learning exactly once when night ends
-          if (!id(night_ended_today) &&
-              fabs(current - end) < ${NIGHT_TIME_TOLERANCE}) {
-
-            id(night_ended_today) = true;
-            id(evaluate_night_quality).execute();
-            id(eco_self_learning).execute();
-          }
+          float current = now.hour + now.minute / 60.0f;
 
           // [UA] Скидання прапорця після опівночі для підготовки до нового ранкового циклу
           // [EN] Resetting the flag after midnight to prepare for a new morning cycle
-          if (current < 0.1) {
+          if (current < 0.1f) {
             id(night_ended_today) = false;
           }
 
   - interval: 5s
     then:
       - lambda: |-
+          // [UA] Якщо користувач ВИМКНУВ логіку кривої, обмеження не застосовується (тільки апаратний макс 80)
+          if (!id(use_curve_logic).state) return;
+
           // [UA] Отримуємо поточний ліміт з погодної кривої
           float cap = id(equitherm_t_set).state;
           
@@ -306,7 +298,7 @@ interval:
           }
           
           // [UA] Bosch Gaz 6000 W не повинен отримувати запит нижче 40°C
-          if (cap < 40.0f) cap = 40.0f;
+          if (cap < 42.0f) cap = 42.0f;
 
           // [UA] Якщо PID видав більше, ніж дозволяє крива — примусово знижуємо
           if (id(ch_setpoint).state > cap) {
@@ -386,7 +378,9 @@ output:
       id: ch_setpoint
       # [UA] Технічний діапазон Bosch Gaz 6000 W: 40°C - 82°C.
       # [EN] Technical range for Bosch Gaz 6000 W: 40°C - 82°C.
-      min_value: 40
+      # [UA] Піднімаємо "підлогу" для PID, щоб збігалася з лімітами Heating Curve
+      # [EN] Raising the PID "floor" to match Heating Curve limits
+      min_value: 42 # [UA] Було 40.0. [EN] Was 40.0
       max_value: 80
       # [UA] zero_means_zero: true гарантує повне вимкнення пальника при нульовому запиті від PID
       # [EN] zero_means_zero: true ensures the burner shuts off completely when PID request is zero
@@ -531,8 +525,6 @@ binary_sensor:
     name: "Night Mode (Scheduled)"
     icon: mdi:weather-night
     lambda: |-
-      id(boiler_was_active_at_night) = false;
-      id(night_mode_active) = true;
       auto time = id(sntp_time).now();
       if (!time.is_valid()) return false; 
 
@@ -559,13 +551,23 @@ binary_sensor:
           id(night_mode_active) = true;
           id(boiler_was_active_at_night) = false;
       - script.execute: measure_cooling
-      # [UA] Оновлюємо розрахунок Preheat щоразу при вході в ніч
-      # [EN] Update Preheat calculation every time when entering night mode
-      - script.execute: calculate_preheat_duration 
-      - script.execute: calculate_eco
-    on_release:
+    on_release: # [UA] Спрацьовує точно в момент виходу з Еко-режиму (Preheat Start)
       - lambda: |-
+          // [UA] Перевірка: якщо пальник ВЖЕ працює, замір для навчання буде неточним
+          // [EN] Check: if the burner is ALREADY active, the learning sample will be inaccurate
+          if (id(flame_on).state) {
+            id(learning_quality_ok) = false;
+            ESP_LOGW("eco", "Morning sample skipped: burner already active.");
+          } else {
+          // Фіксуємо температуру в найхолоднішій точці перед нагрівом
+          id(morning_temp) = id(smart_room_temperature).state;
           id(night_mode_active) = false;
+          ESP_LOGI("eco", "Night ended. Cold sample T_morning: %.2f", id(morning_temp));
+          }
+      # [UA] Виконуємо навчання лише якщо замір був успішним
+      # [EN] Execute learning only if the measurement was successful
+      - script.execute: evaluate_night_quality
+      - script.execute: eco_self_learning
 
 # Gas counter
 #  - platform: gpio
@@ -725,10 +727,10 @@ sensor:
     accuracy_decimals: 3
     lambda: |-
       if (id(flame_on).state) {
-        float modulation = id(rel_mod_level).state / 100.0;
+        float modulation = id(rel_mod_level).state / 100.0f;
         // [UA] 2.1 - макс. витрата, 0.624 - мін. стабільна витрата.
         // [EN] 2.1 - max flow, 0.624 - min stable flow.
-        return 0.624 + (modulation * (2.1 - 0.624));
+        return 0.624f + (modulation * (2.1f - 0.624f));
       }
       return 0.0;
     update_interval: 2s
@@ -932,7 +934,7 @@ sensor:
     device_class: "temperature"
     state_class: "measurement"
     accuracy_decimals: 2
-    update_interval: 2s
+    update_interval: 30s
     web_server:
         sorting_group_id: group_heating
     lambda: |-
@@ -1018,10 +1020,10 @@ sensor:
       // [UA] Адаптивний коефіцієнт кривої k залежно від суворості морозу
       // [EN] Adaptive curve coefficient k based on frost severity
       float k;
-      if (to <= -10.0) k = 1.30;
-      else if (to <= 0.0) k = 1.15;
-      else if (to <= 5.0) k = 1.00;
-      else k = 0.85;
+      if (to <= -10.0f) k = 1.30f;
+      else if (to <= 0.0f) k = 1.15f;
+      else if (to <= 5.0f) k = 1.00f;
+      else k = 0.85f;
 
       // [UA] Розрахунок за класичною формулою опалювальної кривої
       // [EN] Calculation using the classic heating curve formula
@@ -1029,8 +1031,8 @@ sensor:
 
       // [UA] Апаратні обмеження Bosch Gaz 6000 W (діапазон 40-80°C)
       // [EN] Hardware limits for Bosch Gaz 6000 W (range 40-80°C)
-      if (t_water > 80.0) t_water = 80.0;
-      if (t_water < 40.0) t_water = 40.0;
+      if (t_water > 80.0f) t_water = 80.0f;
+      if (t_water < 42.0f) t_water = 42.0f;
 
       return t_water;
     update_interval: 60s
@@ -1103,12 +1105,12 @@ sensor:
 # [UA] Текстові сенсори: діагностика та системні статуси
 # [EN] Text sensors: diagnostics and system statuses
 text_sensor:
-  # [UA] Зберігає останнє повідомлення про таймаут OpenTherm для дебагу
-  # [EN] Stores the last OpenTherm timeout message for debugging
-  - platform: template
-    name: "Last Timeout Message"
-    icon: mdi:math-log
-    id: last_timeout_msg
+#  # [UA] Зберігає останнє повідомлення про таймаут OpenTherm для дебагу
+#  # [EN] Stores the last OpenTherm timeout message for debugging
+#  - platform: template
+#    name: "Last Timeout Message"
+#    icon: mdi:math-log
+#    id: last_timeout_msg
 
   - platform: template
     name: "Будинок: Статус розрахунків"
@@ -1196,6 +1198,8 @@ climate:
       kp: 0.4
       ki: 0.002
       kd: 0
+      # [UA] 60 зразків при 1s апдейті = 1 хвилина усереднення. 
+      # [EN] 60 samples with 1s update = 1 minute of averaging.
       output_averaging_samples: 60
     deadband_parameters:
       threshold_high: 0.5
@@ -1235,11 +1239,11 @@ climate:
           float cap = id(equitherm_t_set).state; // Беремо значення з погодної кривої
           
           if (id(night_mode).state) {
-            cap -= 8.0; // Вночі додатково обмежуємо воду (наприклад, не вище 45-48°C)
+            cap -= 8.0f; // Вночі додатково обмежуємо воду (наприклад, не вище 45-48°C)
           }
           
           // Технічний мінімум Bosch Gaz 6000 W
-          if (cap < 40.0) cap = 40.0; // [UA] Мін. поріг Bosch [EN] Bosch min threshold
+          if (cap < 42.0f) cap = 42.0f; // [UA] Мін. поріг Bosch [EN] Bosch min threshold
 
           // Примусове обмеження виходу PID
           if (id(ch_setpoint).state > cap) {
@@ -1247,9 +1251,9 @@ climate:
           }
 
           // 4. Логування
-          ESP_LOGI("climate", "Target: %.1f, Water: %.1f %s", 
-                   x.target_temperature, id(ch_setpoint).state,
-                   id(night_mode).state ? "(NIGHT MODE)" : "");
+          //ESP_LOGI("climate", "Target: %.1f, Water: %.1f %s", 
+          //         x.target_temperature, id(ch_setpoint).state,
+          //         id(night_mode).state ? "(NIGHT MODE)" : "");
 
 # [UA] Блок скриптів для реалізації складної логіки самонавчання та розрахунків
 # [EN] Script block for implementing complex self-learning logic and calculations
@@ -1276,18 +1280,19 @@ script:
             return;
           }
 
-          float dt = (millis() - id(sample_time_start)) / 3600000.0;
-          if (dt < 0.2) return;
+          float dt = (millis() - id(sample_time_start)) / 3600000.0f;
+          if (dt < 0.2f) return;
 
           float rate = (id(temp_sample_start) - id(smart_room_temperature).state) / dt;
 
           // [UA] Валідація результату та оновлення глобальної змінної з фільтрацією (0.7/0.3)
           // [EN] Result validation and global variable update with filtering (0.7/0.3)
-          if (rate > 0 && rate < 2.0) {
-            id(cooling_rate_measured) = id(cooling_rate_measured) * 0.7 + rate * 0.3;
+          if (rate > 0.0f && rate < 2.0f) {
+            id(cooling_rate_measured) = id(cooling_rate_measured) * 0.7f + rate * 0.3f;
             id(calculation_status).publish_state("Охолодження виміряно успішно");
-            id(cooling_rate_ui).publish_state(id(cooling_rate_measured)); 
+            id(cooling_rate_ui).publish_state(id(cooling_rate_measured));
             ESP_LOGI("measure_cooling", "New cooling rate: %.2f °C/h", id(cooling_rate_measured));
+            id(calculate_eco).execute(); 
           } else {
             id(calculation_status).publish_state("Замір неточний (Т не впала)");
           }
@@ -1314,13 +1319,13 @@ script:
             return;
           }
 
-          float dt = (millis() - id(sample_time_start)) / 3600000.0;
-          if (dt < 0.2) return;
+          float dt = (millis() - id(sample_time_start)) / 3600000.0f;
+          if (dt < 0.2f) return;
 
           float rate = (id(smart_room_temperature).state - id(temp_sample_start)) / dt;
 
-          if (rate > 0 && rate <= 3.0) {
-            id(heating_rate_measured) = id(heating_rate_measured) * 0.7 + rate * 0.3;
+          if (rate > 0.0f && rate <= 3.0f) {
+            id(heating_rate_measured) = id(heating_rate_measured) * 0.7f + rate * 0.3f;
             id(calculation_status).publish_state("New heating rate calculated");
             id(heating_rate_ui).publish_state(id(heating_rate_measured));
             
@@ -1370,17 +1375,14 @@ script:
             id(eco_gain);
 
           // Обмеження (clamp), щоб будинок не вихолодився більше ніж на 1.5°C
-          id(eco_offset) = clamp(
-            offset,
-            ${ECO_OFFSET_MIN},
-            ${ECO_OFFSET_MAX}
-          );
+          id(eco_offset) = clamp(offset, ${ECO_OFFSET_MIN}, ${ECO_OFFSET_MAX});
           
           // Синхронізація з Home Assistant
           id(eco_offset_ui).publish_state(id(eco_offset));
           id(calculation_status).publish_state("Еко-зміщення розраховано");
           
           ESP_LOGI("calculate_eco", "Calculated adaptive offset: %.2f °C", id(eco_offset));
+          id(calculate_preheat_duration).execute(); 
 
   # [UA] Скрипт самонавчання: щоранку коригує eco_gain на основі похибки температури
   # [EN] Self-learning script: adjusts eco_gain every morning based on temperature error
@@ -1396,11 +1398,11 @@ script:
           float error = id(morning_temp) - id(ch_climate).target_temperature;
 
           // Холодно → eco був завеликий
-          if (error < -0.3) {
+          if (error < -0.3f) {
             id(eco_gain) -= ${ECO_GAIN_STEP};
           }
           // Занадто тепло → можна економити більше
-          else if (error > 0.3) {
+          else if (error > 0.3f) {
             id(eco_gain) += ${ECO_GAIN_STEP};
           }
 
@@ -1419,7 +1421,7 @@ script:
 
           float hours = (end >= start)
             ? (end - start)
-            : (24.0 - start + end);
+            : (24.0f - start + end);
 
           id(night_duration_hours) = hours;
 
