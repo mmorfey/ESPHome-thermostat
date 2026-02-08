@@ -624,11 +624,12 @@ binary_sensor:
 
       if (start > adjusted_end) {
         // A case where the night lasts beyond midnight (e.g. 10:00 PM - 6:00 AM)
-        return (now_f >= start || now_f < adjusted_end);
+        return (now_f >= start_with_tol || now_f < adjusted_end);
       } else {
         // The case when the start and end are within the same day (for example, 12:00 AM - 08:00 AM)
-        return (now_f >= start && now_f < adjusted_end);
+        return (now_f >= start_with_tol && now_f < adjusted_end);
       }
+
     # [UA] Тригери для запуску розрахунків при переході в нічний режим
     # [EN] Triggers to start calculations when entering night mode
     on_press:
